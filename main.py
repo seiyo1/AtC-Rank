@@ -157,7 +157,42 @@ async def sync_problems() -> None:
     except Exception:
         logger.exception("failed to fetch problem models")
         return
-    model_map = {m["problem_id"]: m.get("difficulty") for m in models}
+    model_map = {}
+    if isinstance(models, dict):
+        if "models" in models:
+            models = models["models"]
+        elif "data" in models:
+            models = models["data"]
+        else:
+            # dict mapping problem_id -> difficulty or model object
+            for pid, value in models.items():
+                if isinstance(value, dict):
+                    model_map[pid] = value.get("difficulty")
+                elif isinstance(value, (int, float)):
+                    model_map[pid] = value
+            if model_map:
+                models = []
+            else:
+                logger.error(
+                    "unexpected problem models payload (dict keys=%s)",
+                    list(models.keys())[:5],
+                )
+                return
+    if isinstance(models, str):
+        logger.error("unexpected problem models payload (string)")
+        return
+    if not isinstance(models, list):
+        logger.error("unexpected problem models payload type: %s", type(models))
+        return
+
+    if not model_map:
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            pid = m.get("problem_id")
+            if not pid:
+                continue
+            model_map[pid] = m.get("difficulty")
     try:
         problems = await atcoder_api.fetch_problems(session)
     except Exception:
