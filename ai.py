@@ -29,17 +29,23 @@ def _extract_text(resp) -> Optional[str]:
     return None
 
 
-async def generate_message(prompt: str) -> Optional[str]:
+async def generate_message(
+    prompt: str,
+    *,
+    system_prompt: str | None = None,
+    model: str | None = None,
+) -> Optional[str]:
     if not OPENAI_API_KEY:
         return None
     try:
         client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        sys_prompt = system_prompt or "Discord向けの称賛メッセージを書く。日本語1文、絵文字1つ以上、25〜60文字で返す。"
         resp = await client.responses.create(
-            model=AI_MODEL,
+            model=model or AI_MODEL,
             input=[
                 {
                     "role": "system",
-                    "content": "Discord向けの称賛メッセージを書く。日本語1文、絵文字1つ以上、25〜60文字で返す。",
+                    "content": sys_prompt,
                 },
                 {"role": "user", "content": prompt},
             ],

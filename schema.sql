@@ -36,7 +36,7 @@ create table if not exists ratings (
 
 create table if not exists user_fetch_state (
   discord_id integer primary key references users(discord_id),
-  last_checked_epoch integer not null default 0,
+  last_checked_epoch integer not null default 1768748400,
   last_submission_id integer
 );
 
@@ -59,6 +59,13 @@ create table if not exists weekly_scores (
   score integer not null default 0,
   score_updated_at text not null default CURRENT_TIMESTAMP,
   primary key (week_start, discord_id)
+);
+
+create table if not exists weekly_reports (
+  week_start text primary key,
+  reset_time text not null,
+  report_text text,
+  ai_comment text
 );
 
 create table if not exists submissions (

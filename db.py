@@ -6,6 +6,7 @@ from typing import Any, Iterable
 
 import aiosqlite
 
+from config import INITIAL_FETCH_EPOCH
 SCHEMA_PATH = pathlib.Path(__file__).with_name("schema.sql")
 
 
@@ -48,6 +49,10 @@ async def create_db(path: str) -> aiosqlite.Connection:
 async def init_db(conn: aiosqlite.Connection) -> None:
     schema = SCHEMA_PATH.read_text()
     await conn.executescript(schema)
+    await conn.execute(
+        "update user_fetch_state set last_checked_epoch=? where last_checked_epoch=0",
+        (INITIAL_FETCH_EPOCH,),
+    )
     await conn.commit()
 
 
@@ -74,6 +79,7 @@ async def update_setting(conn: aiosqlite.Connection, guild_id: int, field: str, 
 
 
 async def upsert_user(conn: aiosqlite.Connection, discord_id: int, atcoder_id: str) -> None:
+    atcoder_id = atcoder_id.strip()
     await conn.execute(
         """
         insert into users (discord_id, atcoder_id)
@@ -83,8 +89,8 @@ async def upsert_user(conn: aiosqlite.Connection, discord_id: int, atcoder_id: s
         (discord_id, atcoder_id),
     )
     await conn.execute(
-        "insert into user_fetch_state (discord_id) values (?) on conflict do nothing",
-        (discord_id,),
+        "insert into user_fetch_state (discord_id, last_checked_epoch) values (?, ?) on conflict do nothing",
+        (discord_id, INITIAL_FETCH_EPOCH),
     )
     await conn.execute(
         "insert into streaks (discord_id) values (?) on conflict do nothing",
@@ -113,7 +119,7 @@ async def get_user_atcoder_id(conn: aiosqlite.Connection, discord_id: int) -> st
 async def get_fetch_state(conn: aiosqlite.Connection, discord_id: int) -> dict[str, Any]:
     cursor = await conn.execute("select * from user_fetch_state where discord_id=?", (discord_id,))
     row = await cursor.fetchone()
-    return dict(row) if row else {"last_checked_epoch": 0, "last_submission_id": None}
+    return dict(row) if row else {"last_checked_epoch": INITIAL_FETCH_EPOCH, "last_submission_id": None}
 
 
 async def update_fetch_state(conn: aiosqlite.Connection, discord_id: int, last_epoch: int, last_submission_id: int | None) -> None:
@@ -248,10 +254,11 @@ async def add_weekly_score(
 async def get_weekly_scores(conn: aiosqlite.Connection, week_start: datetime) -> list[dict[str, Any]]:
     cursor = await conn.execute(
         """
-        select discord_id, score, score_updated_at
-        from weekly_scores
-        where week_start=?
-        order by score desc, score_updated_at asc
+        select w.discord_id, w.score, w.score_updated_at, u.atcoder_id
+        from weekly_scores w
+        left join users u on w.discord_id = u.discord_id
+        where w.week_start=?
+        order by w.score desc, w.score_updated_at asc
         """,
         (_dt_to_str(week_start),),
     )
@@ -266,6 +273,27 @@ async def get_weekly_score(conn: aiosqlite.Connection, week_start: datetime, dis
     )
     row = await cursor.fetchone()
     return int(row["score"]) if row else 0
+
+
+async def upsert_weekly_report(
+    conn: aiosqlite.Connection,
+    week_start: datetime,
+    reset_time: datetime,
+    report_text: str,
+    ai_comment: str | None,
+) -> None:
+    await conn.execute(
+        """
+        insert into weekly_reports (week_start, reset_time, report_text, ai_comment)
+        values (?, ?, ?, ?)
+        on conflict (week_start) do update
+          set reset_time=excluded.reset_time,
+              report_text=excluded.report_text,
+              ai_comment=excluded.ai_comment
+        """,
+        (_dt_to_str(week_start), _dt_to_str(reset_time), report_text, ai_comment),
+    )
+    await conn.commit()
 
 
 async def insert_submission(

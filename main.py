@@ -17,6 +17,7 @@ from ai import generate_message
 from config import (
     AI_ENABLED,
     AI_PROBABILITY,
+    AI_MODEL_WEEKLY,
     DISCORD_TOKEN,
     GUILD_ID,
     POLL_INTERVAL_SECONDS,
@@ -85,15 +86,20 @@ last_problems_sync_at: datetime | None = None
 last_ratings_sync_at: datetime | None = None
 
 COLOR_VALUES = {
-    "gray": 0x808080,
-    "brown": 0x804000,
-    "green": 0x008000,
-    "cyan": 0x00C0C0,
-    "blue": 0x0000FF,
-    "yellow": 0xC0C000,
-    "orange": 0xFF8000,
-    "red": 0xFF0000,
+    "gray": (192, 192, 192),
+    "brown": (176, 140, 86),
+    "green": (63, 175, 63),
+    "cyan": (66, 224, 224),
+    "blue": (136, 136, 255),
+    "yellow": (255, 255, 86),
+    "orange": (255, 184, 54),
+    "red": (255, 103, 103),
 }
+
+
+def color_from_key(key: str) -> discord.Colour:
+    r, g, b = COLOR_VALUES[key]
+    return discord.Colour.from_rgb(r, g, b)
 
 
 @bot.event
@@ -144,9 +150,13 @@ async def on_close() -> None:
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     logger.exception("app command error: %s", error)
-    if interaction.response.is_done():
-        return
-    await interaction.response.send_message("コマンドでエラーが発生しました", ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send("コマンドでエラーが発生しました", ephemeral=True)
+        else:
+            await interaction.response.send_message("コマンドでエラーが発生しました", ephemeral=True)
+    except discord.NotFound:
+        pass
 
 
 async def sync_problems() -> None:
@@ -230,7 +240,7 @@ async def ensure_color_roles(guild: discord.Guild) -> None:
         role = guild.get_role(role_id) if role_id else None
         if role is None:
             try:
-                role = await guild.create_role(name=name, colour=discord.Colour(COLOR_VALUES[key]))
+                role = await guild.create_role(name=name, colour=color_from_key(key))
             except discord.Forbidden:
                 logger.warning("missing permissions to create role %s", name)
                 continue
@@ -327,7 +337,6 @@ async def handle_weekly_reset() -> None:
     guild = bot.get_guild(GUILD_ID) if GUILD_ID else None
     if not guild:
         return
-    # weekly champion
     current_start = week_start_jst(now_utc())
     prev_start = current_start - timedelta(days=7)
     scores = await db.get_weekly_scores(pool, prev_start)
@@ -346,6 +355,7 @@ async def handle_weekly_reset() -> None:
                         await winner.add_roles(role)
                 except discord.Forbidden:
                     logger.warning("missing permissions to update weekly role")
+    await send_weekly_reset_message(guild, prev_start, scores, current_start, force_ai=True)
     await update_rank_message(guild)
     await update_all_ratings(guild)
 
@@ -383,14 +393,14 @@ async def poll_all_users() -> None:
 async def poll_user(discord_id: int, atcoder_id: str) -> None:
     if not session or not pool:
         return
-    try:
-        results = await atcoder_api.fetch_user_results(session, atcoder_id)
-    except Exception:
-        logger.exception("failed to fetch results: %s", atcoder_id)
-        return
     state = await db.get_fetch_state(pool, discord_id)
     last_epoch = int(state.get("last_checked_epoch", 0))
     last_submission_id = state.get("last_submission_id")
+    try:
+        results = await atcoder_api.fetch_user_results(session, atcoder_id, last_epoch)
+    except Exception:
+        logger.exception("failed to fetch results: %s", atcoder_id)
+        return
     filtered = []
     for r in results:
         if r.get("result") != "AC":
@@ -428,12 +438,14 @@ async def handle_ac(discord_id: int, atcoder_id: str, submission: dict, submitte
     problem_id = submission.get("problem_id")
     if not problem_id:
         return False
+    submission_id = submission.get("id")
     last_ac_at = await db.get_last_ac(pool, discord_id, problem_id)
     if last_ac_at and submitted_at - last_ac_at < timedelta(days=7):
         return False
     problem = await db.get_problem(pool, problem_id)
     title = problem.get("title") if problem else problem_id
     difficulty = problem.get("difficulty") if problem else None
+    contest_id = problem.get("contest_id") if problem else None
 
     rating = await db.get_rating(pool, discord_id)
 
@@ -466,7 +478,21 @@ async def handle_ac(discord_id: int, atcoder_id: str, submission: dict, submitte
     await db.upsert_last_ac(pool, discord_id, problem_id, submitted_at)
 
     await maybe_update_streak_role(discord_id, new_streak)
-    await send_ac_notification(discord_id, atcoder_id, title, score_final, diff_emoji, rate_emoji, difficulty, rating, new_streak)
+    await send_ac_notification(
+        discord_id,
+        atcoder_id,
+        title,
+        problem_id,
+        contest_id,
+        submission_id,
+        submitted_at,
+        score_final,
+        diff_emoji,
+        rate_emoji,
+        difficulty,
+        rating,
+        new_streak,
+    )
 
     guild = bot.get_guild(GUILD_ID) if GUILD_ID else None
     if guild:
@@ -511,10 +537,63 @@ def pick_template(score: int) -> str:
     return random.choice(NOTIFY_TEMPLATES[key])
 
 
+def score_marker(score: int) -> str:
+    if score < 200:
+        return ""
+    if score < 300:
+        return "🔥"
+    return "💥💥"
+
+
+def build_ac_embed(
+    *,
+    title: str,
+    display_name: str,
+    description: str,
+    problem_id: str,
+    contest_id: str | None,
+    submission_id: int | None,
+    submitted_at: datetime,
+    score: int,
+    weekly_score: int,
+    streak: int,
+    difficulty: int | None,
+    rating: int,
+    diff_emoji: str,
+    rate_emoji: str,
+) -> discord.Embed:
+    embed = discord.Embed(title=title)
+    if difficulty is not None:
+        embed.color = color_from_key(color_key(difficulty))
+    submission_url = None
+    if contest_id and submission_id:
+        submission_url = f"https://atcoder.jp/contests/{contest_id}/submissions/{submission_id}"
+        embed.url = submission_url
+
+    if difficulty is None:
+        diff_text = "未設定"
+    else:
+        diff_text = f"{diff_emoji} {difficulty}"
+    marker = score_marker(score)
+    score_text = f"**+{score}** {marker}".strip()
+    embed.add_field(name="Score", value=score_text, inline=False)
+    embed.add_field(name="コメント", value=description or " ", inline=False)
+    embed.add_field(name="Difficulty", value=diff_text, inline=False)
+    embed.add_field(name="週間累計", value=str(weekly_score), inline=True)
+    embed.add_field(name="ストリーク", value=f"{streak}日", inline=True)
+    embed.add_field(name="Rating", value=f"{rate_emoji} {rating}", inline=True)
+    embed.set_footer(text=f"atcrank | {to_jst(submitted_at).strftime('%Y-%m-%d %H:%M')} JST")
+    return embed
+
+
 async def send_ac_notification(
     discord_id: int,
     atcoder_id: str,
     title: str,
+    problem_id: str,
+    contest_id: str | None,
+    submission_id: int | None,
+    submitted_at: datetime,
     score: int,
     diff_emoji: str,
     rate_emoji: str,
@@ -544,23 +623,16 @@ async def send_ac_notification(
     if not isinstance(channel, discord.TextChannel):
         return
 
+    display_name = atcoder_id
     template = pick_template(score)
-    content = template.format(
-        user=f"<@{discord_id}>",
-        score=score,
-        diff_emoji=diff_emoji,
-        rate_emoji=rate_emoji,
-    )
+    description = template.format(user=display_name)
 
-    embed = discord.Embed(title=title)
-    if difficulty is not None:
-        embed.color = COLOR_VALUES[color_key(difficulty)]
+    week_start = week_start_jst(now_utc())
+    weekly_score = await db.get_weekly_score(pool, week_start, discord_id)
 
     ai_enabled = settings.get("ai_enabled", AI_ENABLED)
     ai_prob = settings.get("ai_probability", AI_PROBABILITY)
     if ai_enabled and random.randint(1, 100) <= ai_prob:
-        week_start = week_start_jst(now_utc())
-        weekly_score = await db.get_weekly_score(pool, week_start, discord_id)
         prompt = (
             "目的: AtCoderのAC通知に添える短い一言を作る。\n"
             "条件: 日本語1文・25〜60文字・絵文字1つ以上・ポジティブ。\n"
@@ -579,8 +651,28 @@ async def send_ac_notification(
         )
         ai_text = await generate_message(prompt)
         if ai_text:
-            content = f"{content}\n{ai_text}"
+            description = ai_text
 
+    # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
+
+    embed = build_ac_embed(
+        title=title,
+        display_name=display_name,
+        description=description,
+        problem_id=problem_id,
+        contest_id=contest_id,
+        submission_id=submission_id,
+        submitted_at=submitted_at,
+        score=score,
+        weekly_score=weekly_score,
+        streak=streak,
+        difficulty=difficulty,
+        rating=rating,
+        diff_emoji=diff_emoji,
+        rate_emoji=rate_emoji,
+    )
+
+    content = f"<@{discord_id}>"
     try:
         await channel.send(content=content, embed=embed)
     except discord.Forbidden:
@@ -606,28 +698,13 @@ async def update_rank_message(guild: discord.Guild) -> None:
             return
     if not isinstance(channel, discord.TextChannel):
         return
-
-    week_start = week_start_jst(now_utc())
-    week_start_jst_str = to_jst(week_start).strftime("%Y-%m-%d %H:%M")
-    scores = await db.get_weekly_scores(pool, week_start)
-
-    lines = [f"週間ランキング（開始: {week_start_jst_str} JST）"]
-    if not scores:
-        lines.append("まだスコアがありません")
-    else:
-        for i, row in enumerate(scores, start=1):
-            member = guild.get_member(row["discord_id"])
-            name = member.display_name if member else f"<@{row['discord_id']}>"
-            lines.append(f"{i}. {name} {row['score']}")
-    content = "\n".join(lines)
-    if len(content) > 1900:
-        content = content[:1900] + "\n...（省略）"
+    embed = await build_rank_embed(guild)
 
     message_id = settings.get("rank_message_id")
     if message_id:
         try:
             msg = await channel.fetch_message(message_id)
-            await msg.edit(content=content)
+            await msg.edit(content="", embed=embed)
             return
         except discord.NotFound:
             pass
@@ -635,7 +712,7 @@ async def update_rank_message(guild: discord.Guild) -> None:
             logger.warning("missing permissions to edit rank message")
             return
     try:
-        msg = await channel.send(content)
+        msg = await channel.send(embed=embed)
     except discord.Forbidden:
         logger.warning("missing permissions to send rank message")
         return
@@ -644,6 +721,175 @@ async def update_rank_message(guild: discord.Guild) -> None:
     except discord.Forbidden:
         pass
     await db.update_setting(pool, guild.id, "rank_message_id", msg.id)
+
+
+def format_rank_name(guild: discord.Guild, row: dict) -> str:
+    if "name" in row and row["name"]:
+        label = row["name"]
+        return label if len(label) <= 24 else label[:21] + "..."
+    atcoder_id = row.get("atcoder_id") or "unknown"
+    user_id = row.get("discord_id")
+    if not user_id:
+        return atcoder_id if len(atcoder_id) <= 24 else atcoder_id[:21] + "..."
+    member = guild.get_member(user_id)
+    if not member:
+        return atcoder_id if len(atcoder_id) <= 24 else atcoder_id[:21] + "..."
+    display = member.display_name
+    label = f"{atcoder_id} ({display})"
+    return label if len(label) <= 24 else label[:21] + "..."
+
+
+async def build_rank_embed(
+    guild: discord.Guild,
+    scores_override: list[dict] | None = None,
+    *,
+    week_start: datetime | None = None,
+    as_of: datetime | None = None,
+) -> discord.Embed:
+    week_start = week_start or week_start_jst(now_utc())
+    week_end = week_start + timedelta(days=7)
+    as_of = as_of or now_utc()
+    week_start_jst_str = to_jst(week_start).strftime("%Y-%m-%d %H:%M")
+    week_end_jst_str = to_jst(week_end).strftime("%Y-%m-%d %H:%M")
+    updated_jst_str = to_jst(as_of).strftime("%Y-%m-%d %H:%M")
+    scores = scores_override or await db.get_weekly_scores(pool, week_start)
+
+    embed = discord.Embed(
+        title="🏆 週間ランキング",
+        color=discord.Colour.gold(),
+    )
+
+    header = (
+        f"期間: {week_start_jst_str} JST 〜 {week_end_jst_str} JST\n"
+        f"更新: {updated_jst_str} JST\n"
+        f"参加: {len(scores)}人"
+    )
+
+    if not scores:
+        embed.description = header + "\n\n" + "まだスコアがありません"
+        return embed
+
+    medal = {1: "🥇", 2: "🥈", 3: "🥉"}
+    score_width = max(2, max(len(str(row["score"])) for row in scores))
+    lines = []
+    for i, row in enumerate(scores, start=1):
+        prefix = medal.get(i, str(i))
+        score_str = str(row["score"]).rjust(score_width)
+        score_str = score_str.replace(" ", "\u00A0")
+        lines.append(f"{prefix} **{score_str}** - {format_rank_name(guild, row)}")
+    body = "\n".join(lines)
+    if len(body) > 900:
+        body = body[:890] + "\n...（省略）"
+    embed.description = header + "\n\n" + body
+    return embed
+
+
+async def send_weekly_reset_message(
+    guild: discord.Guild,
+    week_start: datetime,
+    scores: list[dict],
+    reset_time: datetime,
+    *,
+    force_ai: bool = False,
+    channel_override: discord.TextChannel | None = None,
+    mention_everyone: bool = True,
+) -> None:
+    if not pool:
+        return
+    settings = await db.get_settings(pool, guild.id)
+    if channel_override is None:
+        notify_channel_id = settings.get("notify_channel_id")
+        if not notify_channel_id:
+            return
+        channel = guild.get_channel(notify_channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(notify_channel_id)
+            except (discord.NotFound, discord.Forbidden):
+                logger.warning("notify channel not available")
+                return
+        if not isinstance(channel, discord.TextChannel):
+            return
+    else:
+        channel = channel_override
+
+    reset_str = to_jst(reset_time).strftime("%Y-%m-%d %H:%M:%S")
+    total_users = len(scores)
+    ai_text = None
+    lines = [
+        "@everyone" if mention_everyone else None,
+        "週間ランキングのリセットが完了しました！",
+        "先週の確定ランキングはこちら👇",
+        "一週間お疲れさまでした。今週も一緒に頑張りましょう💪",
+    ]
+    lines = [line for line in lines if line]
+
+    ai_enabled = settings.get("ai_enabled", AI_ENABLED)
+    ai_prob = settings.get("ai_probability", AI_PROBABILITY)
+    if force_ai or (ai_enabled and random.randint(1, 100) <= ai_prob):
+        prev_start = week_start - timedelta(days=7)
+        prev_scores = await db.get_weekly_scores(pool, prev_start)
+        prev_map = {row["discord_id"]: row["score"] for row in prev_scores if row.get("discord_id") is not None}
+
+        top_lines = []
+        for i, row in enumerate(scores[:3], start=1):
+            name = row.get("atcoder_id") or "unknown"
+            top_lines.append(f"{i}:{name}:{row['score']}")
+
+        repeated = []
+        prev_top = {row["discord_id"] for row in prev_scores[:3] if row.get("discord_id") is not None}
+        for row in scores[:3]:
+            discord_id = row.get("discord_id")
+            if discord_id is not None and discord_id in prev_top:
+                repeated.append(row.get("atcoder_id") or "unknown")
+
+        deltas = []
+        for row in scores:
+            discord_id = row.get("discord_id")
+            if discord_id is None:
+                continue
+            prev_score = prev_map.get(discord_id)
+            if prev_score is not None:
+                delta = row["score"] - prev_score
+                if delta != 0:
+                    deltas.append((delta, row))
+        deltas.sort(key=lambda x: x[0], reverse=True)
+        delta_lines = []
+        for delta, row in deltas[:3]:
+            name = row.get("atcoder_id") or "unknown"
+            sign = "+" if delta > 0 else ""
+            delta_lines.append(f"{name}:{sign}{delta}")
+
+        prompt = (
+            "目的: 週間ランキングリセットに添える一言コメントを作る。\n"
+            "条件: 日本語1文・25〜80文字・絵文字1つ以上・労いと応援。\n"
+            f"参加人数:{total_users}\n"
+            f"上位3:{', '.join(top_lines) if top_lines else 'なし'}\n"
+            f"連続上位:{', '.join(repeated) if repeated else 'なし'}\n"
+            f"伸び:{', '.join(delta_lines) if delta_lines else 'なし'}\n"
+            "この状況に合う一言を作成。"
+        )
+        ai_text = await generate_message(
+            prompt,
+            system_prompt="週間ランキングの労いコメントを書く。日本語1文、絵文字1つ以上、25〜80文字で返す。",
+            model=AI_MODEL_WEEKLY,
+        )
+        if ai_text:
+            lines.append(f"コメント: {ai_text}")
+
+    lines.append("【先週の確定ランキング】")
+    lines.append(f"参加: {total_users}人 | リセット: {reset_str} JST")
+    report_text = "\n".join(lines)
+    if channel_override is None:
+        await db.upsert_weekly_report(pool, week_start, reset_time, report_text, ai_text if ai_text else None)
+
+    embed = await build_rank_embed(
+        guild,
+        scores_override=scores,
+        week_start=week_start,
+        as_of=reset_time,
+    )
+    await channel.send(report_text, embed=embed)
 
 
 async def send_healthcheck() -> None:
@@ -696,12 +942,13 @@ async def register(interaction: discord.Interaction, atcoder_id: str, user: disc
     if user and not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("管理者のみ代理登録できます", ephemeral=True)
         return
-    await db.upsert_user(pool, target.id, atcoder_id)
-    await interaction.response.send_message(f"登録しました: {target.mention} -> {atcoder_id}")
+    normalized = atcoder_id.strip()
+    await db.upsert_user(pool, target.id, normalized)
+    await interaction.response.send_message(f"登録しました: {target.mention} -> {normalized}")
     if GUILD_ID:
         guild = bot.get_guild(GUILD_ID)
         if guild:
-            rating = await atcoder_api.fetch_user_rating(session, atcoder_id)
+            rating = await atcoder_api.fetch_user_rating(session, normalized)
             if rating is not None:
                 await db.upsert_rating(pool, target.id, rating)
                 member = guild.get_member(target.id)
@@ -802,6 +1049,201 @@ async def ranking(interaction: discord.Interaction) -> None:
         return
     await update_rank_message(interaction.guild)
     await interaction.response.send_message("ランキングを更新しました", ephemeral=True)
+
+
+@bot.tree.command(name="debug_notify")
+async def debug_notify(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます", ephemeral=True)
+        return
+    if not interaction.guild or not interaction.channel:
+        return
+    await interaction.response.defer(ephemeral=True)
+    display_name = "aisn"
+    score = 320
+    weekly_score = 1280
+    streak = 3
+    difficulty = 1200
+    rating = 1500
+    diff_emoji = COLOR_EMOJI[color_key(difficulty)]
+    rate_emoji = COLOR_EMOJI[color_key(rating)]
+    template = pick_template(score)
+    description = template.format(user=display_name)
+    # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
+    embed = build_ac_embed(
+        title="ABC999 A Sample",
+        display_name=display_name,
+        description=description,
+        problem_id="abc999_a",
+        contest_id="abc999",
+        submission_id=12345678,
+        submitted_at=now_utc(),
+        score=score,
+        weekly_score=weekly_score,
+        streak=streak,
+        difficulty=difficulty,
+        rating=rating,
+        diff_emoji=diff_emoji,
+        rate_emoji=rate_emoji,
+    )
+    await interaction.channel.send(content=interaction.user.mention, embed=embed)
+    await interaction.followup.send("通知プレビューを送信しました", ephemeral=True)
+
+
+@bot.tree.command(name="debug_notify_ai")
+async def debug_notify_ai(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます", ephemeral=True)
+        return
+    if not interaction.guild or not interaction.channel:
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    display_name = "aisn"
+    atcoder_id = "aisn"
+    score = 320
+    weekly_score = 1280
+    streak = 3
+    difficulty = 1200
+    rating = 1500
+    diff_emoji = COLOR_EMOJI[color_key(difficulty)]
+    rate_emoji = COLOR_EMOJI[color_key(rating)]
+    template = pick_template(score)
+    description = template.format(user=display_name)
+    prompt = (
+        "目的: AtCoderのAC通知に添える短い一言を作る。\n"
+        "条件: 日本語1文・25〜60文字・絵文字1つ以上・ポジティブ。\n"
+        "例:\n"
+        " - ナイスAC！勢いがあるね🔥\n"
+        " - 難問突破おめでとう！✨\n"
+        " - いい積み上げ、継続が力💪\n"
+        f"ユーザー:{atcoder_id}\n"
+        "問題:ABC999 A Sample\n"
+        f"増加スコア:{score}\n"
+        f"現在週スコア:{weekly_score}\n"
+        f"difficulty:{difficulty}\n"
+        f"rating:{rating}\n"
+        f"streak:{streak}\n"
+        "この状況に合う一言を作成。"
+    )
+    ai_text = await generate_message(prompt)
+    if ai_text:
+        description = ai_text
+    # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
+
+    embed = build_ac_embed(
+        title="ABC999 A Sample",
+        display_name=display_name,
+        description=description,
+        problem_id="abc999_a",
+        contest_id="abc999",
+        submission_id=12345678,
+        submitted_at=now_utc(),
+        score=score,
+        weekly_score=weekly_score,
+        streak=streak,
+        difficulty=difficulty,
+        rating=rating,
+        diff_emoji=diff_emoji,
+        rate_emoji=rate_emoji,
+    )
+    await interaction.channel.send(content=interaction.user.mention, embed=embed)
+    await interaction.followup.send("AI通知プレビューを送信しました", ephemeral=True)
+
+
+@bot.tree.command(name="debug_rank")
+async def debug_rank(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます", ephemeral=True)
+        return
+    if not interaction.guild or not interaction.channel:
+        return
+    fake_scores = [
+        {"name": "Alice", "score": 1820},
+        {"name": "Bob", "score": 1710},
+        {"name": "Carol", "score": 1590},
+        {"name": "Dave", "score": 1505},
+        {"name": "Erin", "score": 1430},
+        {"name": "Fiona", "score": 1310},
+        {"name": "Gabe", "score": 1215},
+        {"name": "Hana", "score": 1150},
+        {"name": "Ivan", "score": 980},
+        {"name": "Jill", "score": 920},
+    ]
+    embed = await build_rank_embed(interaction.guild, scores_override=fake_scores)
+    await interaction.channel.send(embed=embed)
+    await interaction.response.send_message("ランキングプレビューを送信しました", ephemeral=True)
+
+
+@bot.tree.command(name="debug_weekly_reset")
+async def debug_weekly_reset(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます", ephemeral=True)
+        return
+    if not interaction.guild:
+        return
+    await interaction.response.defer(ephemeral=True)
+    fake_scores = [
+        {"atcoder_id": "yz_", "score": 1152},
+        {"atcoder_id": "ri_ra", "score": 747},
+        {"atcoder_id": "sen469", "score": 600},
+        {"atcoder_id": "yuki_hitori", "score": 529},
+        {"atcoder_id": "blue_island", "score": 0},
+        {"atcoder_id": "carduusmille", "score": 0},
+    ]
+    await send_weekly_reset_message(
+        interaction.guild,
+        week_start_jst(now_utc()) - timedelta(days=7),
+        fake_scores,
+        next_week_start_jst(now_utc()),
+        force_ai=False,
+        channel_override=interaction.channel,
+        mention_everyone=False,
+    )
+    await interaction.followup.send("週間リセット通知を送信しました", ephemeral=True)
+
+
+@bot.tree.command(name="debug_weekly_reset_ai")
+async def debug_weekly_reset_ai(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます", ephemeral=True)
+        return
+    if not interaction.guild:
+        return
+    await interaction.response.defer(ephemeral=True)
+    fake_scores = [
+        {"atcoder_id": "yz_", "score": 1152},
+        {"atcoder_id": "ri_ra", "score": 747},
+        {"atcoder_id": "sen469", "score": 600},
+        {"atcoder_id": "yuki_hitori", "score": 529},
+        {"atcoder_id": "blue_island", "score": 0},
+        {"atcoder_id": "carduusmille", "score": 0},
+    ]
+    await send_weekly_reset_message(
+        interaction.guild,
+        week_start_jst(now_utc()) - timedelta(days=7),
+        fake_scores,
+        next_week_start_jst(now_utc()),
+        force_ai=True,
+        channel_override=interaction.channel,
+        mention_everyone=False,
+    )
+    await interaction.followup.send("AI付き週間リセット通知を送信しました", ephemeral=True)
 
 
 @bot.tree.command(name="profile")
