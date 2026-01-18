@@ -527,6 +527,12 @@ async def send_ac_notification(
         week_start = week_start_jst(now_utc())
         weekly_score = await db.get_weekly_score(pool, week_start, discord_id)
         prompt = (
+            "目的: AtCoderのAC通知に添える短い一言を作る。\n"
+            "条件: 日本語1文・25〜60文字・絵文字1つ以上・ポジティブ。\n"
+            "例:\n"
+            " - ナイスAC！勢いがあるね🔥\n"
+            " - 難問突破おめでとう！✨\n"
+            " - いい積み上げ、継続が力💪\n"
             f"ユーザー:{atcoder_id}\n"
             f"問題:{title}\n"
             f"増加スコア:{score}\n"
@@ -534,7 +540,7 @@ async def send_ac_notification(
             f"difficulty:{difficulty}\n"
             f"rating:{rating}\n"
             f"streak:{streak}\n"
-            "この状況に合う短い一言を日本語で。"
+            "この状況に合う一言を作成。"
         )
         ai_text = await generate_message(prompt)
         if ai_text:

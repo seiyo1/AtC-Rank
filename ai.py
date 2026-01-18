@@ -39,11 +39,10 @@ async def generate_message(prompt: str) -> Optional[str]:
             input=[
                 {
                     "role": "system",
-                    "content": "You are a concise, fun Discord message writer for competitive programming updates. Output a single Japanese sentence with emojis. Keep it 40-90 characters.",
+                    "content": "Discord向けの称賛メッセージを書く。日本語1文、絵文字1つ以上、25〜60文字で返す。",
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_output_tokens=80,
         )
         return _extract_text(resp)
     except Exception:
