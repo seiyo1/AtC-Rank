@@ -383,10 +383,21 @@ async def handle_weekly_reset() -> None:
                     for member in role.members:
                         await member.remove_roles(role)
                     winner = guild.get_member(winner_id)
+                    if winner is None:
+                        try:
+                            winner = await guild.fetch_member(winner_id)
+                        except (discord.NotFound, discord.Forbidden):
+                            winner = None
                     if winner:
                         await winner.add_roles(role)
+                    else:
+                        logger.warning("weekly winner not found in guild: %s", winner_id)
                 except discord.Forbidden:
                     logger.warning("missing permissions to update weekly role")
+        else:
+            logger.info("weekly role not set; skip assignment")
+    else:
+        logger.info("no weekly scores for %s; skip weekly role", to_jst(prev_start).strftime("%Y-%m-%d %H:%M"))
     await send_weekly_reset_message(guild, prev_start, scores, current_start, force_ai=True)
     await update_rank_message(guild)
     await update_all_ratings(guild)
