@@ -7,6 +7,7 @@ from typing import Any, Iterable
 import aiosqlite
 
 from config import INITIAL_FETCH_EPOCH
+from utils import now_utc, week_start_jst
 SCHEMA_PATH = pathlib.Path(__file__).with_name("schema.sql")
 
 
@@ -36,6 +37,10 @@ def _str_to_date(value: str | None) -> date | None:
     if not value:
         return None
     return date.fromisoformat(value)
+
+
+def _current_week_start_epoch() -> int:
+    return int(week_start_jst(now_utc()).timestamp())
 
 
 async def create_db(path: str) -> aiosqlite.Connection:
@@ -90,7 +95,7 @@ async def upsert_user(conn: aiosqlite.Connection, discord_id: int, atcoder_id: s
     )
     await conn.execute(
         "insert into user_fetch_state (discord_id, last_checked_epoch) values (?, ?) on conflict do nothing",
-        (discord_id, INITIAL_FETCH_EPOCH),
+        (discord_id, _current_week_start_epoch()),
     )
     await conn.execute(
         "insert into streaks (discord_id) values (?) on conflict do nothing",
