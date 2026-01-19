@@ -2,7 +2,7 @@ NOTIFY_TEMPLATES = {
     "low": [
         "{user} AC！一歩ずつ前進 👣",
         "{user} AC！基礎固め 🧱",
-        "{user} AC！堅実に積み上げ 🧩",
+        "{user} AC！堅実に積み上げ 🌱",
     ],
     "mid": [
         "{user} AC！手堅く積み上げ 🧱",

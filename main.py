@@ -715,7 +715,7 @@ async def send_ac_notification(
         rate_emoji=rate_emoji,
     )
 
-    content = f"<@{discord_id}>"
+    content = f"<@{discord_id}>がACしました🎉"
     try:
         await channel.send(content=content, embed=embed)
     except discord.Forbidden:
