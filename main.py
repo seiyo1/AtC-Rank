@@ -280,6 +280,38 @@ async def apply_color_role(member: discord.Member, rating: int) -> None:
         logger.warning("missing permissions to update roles for %s", member.id)
 
 
+async def remove_user_roles(member: discord.Member) -> None:
+    if not pool:
+        return
+    settings = await db.get_settings(pool, member.guild.id)
+    remove_roles = []
+
+    role_weekly_id = settings.get("role_weekly_id")
+    if role_weekly_id:
+        role = member.guild.get_role(role_weekly_id)
+        if role and role in member.roles:
+            remove_roles.append(role)
+
+    role_streak_id = settings.get("role_streak_id")
+    if role_streak_id:
+        role = member.guild.get_role(role_streak_id)
+        if role and role in member.roles:
+            remove_roles.append(role)
+
+    stored = await db.get_role_colors(pool, member.guild.id)
+    for role_id in stored.values():
+        role = member.guild.get_role(role_id)
+        if role and role in member.roles:
+            remove_roles.append(role)
+
+    if not remove_roles:
+        return
+    try:
+        await member.remove_roles(*remove_roles)
+    except discord.Forbidden:
+        logger.warning("missing permissions to remove roles for %s", member.id)
+
+
 async def polling_loop() -> None:
     global last_poll_at
     await bot.wait_until_ready()
@@ -967,6 +999,10 @@ async def unregister(interaction: discord.Interaction, user: discord.Member | No
         await interaction.response.send_message("管理者のみ代理解除できます", ephemeral=True)
         return
     await db.deactivate_user(pool, target.id)
+    if interaction.guild:
+        member = interaction.guild.get_member(target.id)
+        if member:
+            await remove_user_roles(member)
     await interaction.response.send_message(f"解除しました: {target.mention}")
 
 
