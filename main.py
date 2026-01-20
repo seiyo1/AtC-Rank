@@ -675,7 +675,12 @@ async def send_ac_notification(
 
     ai_enabled = settings.get("ai_enabled", AI_ENABLED)
     ai_prob = settings.get("ai_probability", AI_PROBABILITY)
-    if ai_enabled and random.randint(1, 100) <= ai_prob:
+    if ai_enabled:
+        roll = random.randint(1, 100)
+        logger.info("AC AI roll=%s prob=%s user=%s", roll, ai_prob, atcoder_id)
+    else:
+        roll = None
+    if ai_enabled and roll is not None and roll <= ai_prob:
         prompt = (
             "目的: AtCoderのAC通知に添える短い一言を作る。\n"
             "条件: 日本語1文・25〜60文字・絵文字1つ以上・ポジティブ。\n"
@@ -695,6 +700,9 @@ async def send_ac_notification(
         ai_text = await generate_message(prompt)
         if ai_text:
             description = ai_text
+            logger.info("AC AI message ok len=%s user=%s", len(ai_text), atcoder_id)
+        else:
+            logger.info("AC AI message empty user=%s", atcoder_id)
 
     # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
 
