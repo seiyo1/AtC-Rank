@@ -1557,5 +1557,166 @@ async def goal_clear(interaction: discord.Interaction) -> None:
 bot.tree.add_command(goal_group)
 
 
+# ==================== Persistent Menu ====================
+
+class RegisterModal(discord.ui.Modal, title="AtCoder ID 登録"):
+    atcoder_id = discord.ui.TextInput(
+        label="AtCoder ID",
+        placeholder="例: tourist",
+        min_length=1,
+        max_length=32,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        normalized = str(self.atcoder_id).strip()
+        await db.upsert_user(pool, interaction.user.id, normalized)
+        await interaction.response.send_message(f"✅ 登録しました: {normalized}", ephemeral=True)
+        if GUILD_ID:
+            guild = bot.get_guild(GUILD_ID)
+            if guild and session:
+                rating = await atcoder_api.fetch_user_rating(session, normalized)
+                if rating is not None:
+                    await db.upsert_rating(pool, interaction.user.id, rating)
+                    member = guild.get_member(interaction.user.id)
+                    if member:
+                        await apply_color_role(member, rating)
+
+
+class GoalSetModal(discord.ui.Modal, title="週間目標を設定"):
+    target_score = discord.ui.TextInput(
+        label="目標スコア",
+        placeholder="例: 1000",
+        min_length=1,
+        max_length=10,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        try:
+            score = int(str(self.target_score).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ 数値を入力してください", ephemeral=True)
+            return
+        if score <= 0:
+            await interaction.response.send_message("❌ 1以上の数値を入力してください", ephemeral=True)
+            return
+        ws = week_start_jst(now_utc())
+        await db.upsert_weekly_goal(pool, interaction.user.id, ws, score)
+        current_score = await db.get_weekly_score(pool, ws, interaction.user.id)
+        pct = min(int(current_score / score * 100), 100) if score > 0 else 0
+        bar = build_progress_bar(current_score, score)
+        await interaction.response.send_message(
+            f"🎯 週間目標を **{score}pts** に設定しました！\n"
+            f"現在: {current_score} / {score} pts\n"
+            f"[{bar}] {pct}%",
+            ephemeral=True,
+        )
+
+
+class MenuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="登録", style=discord.ButtonStyle.success, custom_id="menu:register", emoji="✅", row=0)
+    async def register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegisterModal())
+
+    @discord.ui.button(label="登録解除", style=discord.ButtonStyle.danger, custom_id="menu:unregister", emoji="❌", row=0)
+    async def unregister_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        await db.deactivate_user(pool, interaction.user.id)
+        if interaction.guild:
+            member = interaction.guild.get_member(interaction.user.id)
+            if member:
+                await remove_user_roles(member)
+        await interaction.response.send_message("✅ 登録を解除しました", ephemeral=True)
+
+    @discord.ui.button(label="目標設定", style=discord.ButtonStyle.primary, custom_id="menu:goal_set", emoji="🎯", row=1)
+    async def goal_set_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(GoalSetModal())
+
+    @discord.ui.button(label="目標確認", style=discord.ButtonStyle.secondary, custom_id="menu:goal_show", emoji="📊", row=1)
+    async def goal_show_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        ws = week_start_jst(now_utc())
+        goal = await db.get_weekly_goal(pool, interaction.user.id, ws)
+        if not goal:
+            await interaction.response.send_message("📊 今週の目標が設定されていません", ephemeral=True)
+            return
+        target = goal["target_score"]
+        current_score = await db.get_weekly_score(pool, ws, interaction.user.id)
+        pct = min(int(current_score / target * 100), 100) if target > 0 else 0
+        bar = build_progress_bar(current_score, target)
+        status = "🏆 達成！" if current_score >= target else ""
+        await interaction.response.send_message(
+            f"📊 週間目標の進捗 {status}\n"
+            f"現在: {current_score} / {target} pts\n"
+            f"[{bar}] {pct}%",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="目標解除", style=discord.ButtonStyle.secondary, custom_id="menu:goal_clear", emoji="🗑️", row=1)
+    async def goal_clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        ws = week_start_jst(now_utc())
+        goal = await db.get_weekly_goal(pool, interaction.user.id, ws)
+        if not goal:
+            await interaction.response.send_message("📊 今週の目標が設定されていません", ephemeral=True)
+            return
+        await db.delete_weekly_goal(pool, interaction.user.id, ws)
+        await interaction.response.send_message("✅ 週間目標を解除しました", ephemeral=True)
+
+    @discord.ui.button(label="プロフィール", style=discord.ButtonStyle.secondary, custom_id="menu:profile", emoji="👤", row=2)
+    async def profile_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        rating = await db.get_rating(pool, interaction.user.id)
+        streak = await db.get_streak(pool, interaction.user.id)
+        atcoder_id = await db.get_user_atcoder_id(pool, interaction.user.id)
+        if not atcoder_id:
+            await interaction.response.send_message("❌ 登録されていません", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"👤 **{atcoder_id}**\n"
+            f"レート: {rating}\n"
+            f"ストリーク: {streak['current_streak']}日",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(name="menu")
+async def menu_command(interaction: discord.Interaction) -> None:
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ実行できます", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title="📋 AtCrank メニュー",
+        description="ボタンをクリックして操作できます",
+        color=discord.Colour.blue(),
+    )
+    embed.add_field(name="🔑 登録", value="AtCoder IDを登録・解除", inline=False)
+    embed.add_field(name="🎯 週間目標", value="目標の設定・確認・解除", inline=False)
+    embed.add_field(name="👤 プロフィール", value="自分の情報を確認", inline=False)
+    await interaction.response.send_message(embed=embed, view=MenuView())
+
+
+# Bot起動時にPersistent Viewを登録
+@bot.event
+async def setup_hook():
+    bot.add_view(MenuView())
+
+
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
