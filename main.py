@@ -439,8 +439,10 @@ async def poll_user(discord_id: int, atcoder_id: str) -> None:
     state = await db.get_fetch_state(pool, discord_id)
     last_epoch = int(state.get("last_checked_epoch", 0))
     last_submission_id = state.get("last_submission_id")
+    lookback_seconds = 86400
+    window_start = max(0, last_epoch - lookback_seconds)
     try:
-        results = await atcoder_api.fetch_user_results(session, atcoder_id, last_epoch)
+        results = await atcoder_api.fetch_user_results(session, atcoder_id, window_start)
     except Exception:
         logger.exception("failed to fetch results: %s", atcoder_id)
         return
@@ -450,11 +452,15 @@ async def poll_user(discord_id: int, atcoder_id: str) -> None:
             continue
         epoch = int(r.get("epoch_second", 0))
         sid = r.get("id")
+        if epoch < window_start:
+            continue
         if epoch > last_epoch:
             filtered.append(r)
         elif epoch == last_epoch and last_submission_id is not None and sid and sid > last_submission_id:
             filtered.append(r)
         elif epoch == last_epoch and last_submission_id is None:
+            filtered.append(r)
+        elif epoch < last_epoch:
             filtered.append(r)
     filtered.sort(key=lambda x: (x.get("epoch_second", 0), x.get("id") or 0))
     if not filtered:
