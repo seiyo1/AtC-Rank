@@ -22,6 +22,7 @@ INITIAL_FETCH_EPOCH = int(os.getenv("INITIAL_FETCH_EPOCH", "1768748400"))
 AI_ENABLED = _get_bool("AI_ENABLED", True)
 AI_PROBABILITY = int(os.getenv("AI_PROBABILITY", "20"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 AI_MODEL = os.getenv("AI_MODEL", "gpt-5-mini")
 AI_MODEL_CELEBRATION = os.getenv("AI_MODEL_CELEBRATION", AI_MODEL)
 

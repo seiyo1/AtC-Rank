@@ -5,7 +5,7 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-from config import AI_MODEL, OPENAI_API_KEY
+from config import AI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,10 @@ async def generate_message(
     if not OPENAI_API_KEY:
         return None
     try:
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        client_kwargs = {"api_key": OPENAI_API_KEY}
+        if OPENAI_BASE_URL:
+            client_kwargs["base_url"] = OPENAI_BASE_URL
+        client = AsyncOpenAI(**client_kwargs)
         sys_prompt = system_prompt or "Discord向けの称賛メッセージを書く。日本語1文、絵文字1つ以上、25〜60文字で返す。"
         resp = await client.responses.create(
             model=model or AI_MODEL,
