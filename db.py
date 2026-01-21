@@ -350,3 +350,46 @@ async def get_role_colors(conn: aiosqlite.Connection, guild_id: int) -> dict[str
     cursor = await conn.execute("select color_key, role_id from role_colors where guild_id=?", (guild_id,))
     rows = await cursor.fetchall()
     return {r["color_key"]: r["role_id"] for r in rows}
+
+
+async def upsert_weekly_goal(conn: aiosqlite.Connection, discord_id: int, week_start: datetime, target_score: int) -> None:
+    await conn.execute(
+        """
+        insert into weekly_goals (discord_id, week_start, target_score)
+        values (?, ?, ?)
+        on conflict (discord_id, week_start) do update set
+          target_score=excluded.target_score,
+          notified_25=0,
+          notified_50=0,
+          notified_75=0,
+          notified_100=0
+        """,
+        (discord_id, _dt_to_str(week_start), target_score),
+    )
+    await conn.commit()
+
+
+async def get_weekly_goal(conn: aiosqlite.Connection, discord_id: int, week_start: datetime) -> dict[str, Any] | None:
+    cursor = await conn.execute(
+        "select * from weekly_goals where discord_id=? and week_start=?",
+        (discord_id, _dt_to_str(week_start)),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def delete_weekly_goal(conn: aiosqlite.Connection, discord_id: int, week_start: datetime) -> None:
+    await conn.execute(
+        "delete from weekly_goals where discord_id=? and week_start=?",
+        (discord_id, _dt_to_str(week_start)),
+    )
+    await conn.commit()
+
+
+async def update_goal_notification(conn: aiosqlite.Connection, discord_id: int, week_start: datetime, milestone: int) -> None:
+    field = f"notified_{milestone}"
+    await conn.execute(
+        f"update weekly_goals set {field}=1 where discord_id=? and week_start=?",
+        (discord_id, _dt_to_str(week_start)),
+    )
+    await conn.commit()

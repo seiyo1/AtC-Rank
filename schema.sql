@@ -87,3 +87,15 @@ create table if not exists role_colors (
 
 create index if not exists submissions_discord_time_idx on submissions(discord_id, submitted_at);
 create index if not exists weekly_scores_rank_idx on weekly_scores(week_start, score desc, score_updated_at asc);
+
+create table if not exists weekly_goals (
+  discord_id integer references users(discord_id),
+  week_start text not null,
+  target_score integer not null,
+  notified_25 integer not null default 0,
+  notified_50 integer not null default 0,
+  notified_75 integer not null default 0,
+  notified_100 integer not null default 0,
+  created_at text not null default CURRENT_TIMESTAMP,
+  primary key (discord_id, week_start)
+);

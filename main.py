@@ -17,7 +17,7 @@ from ai import generate_message
 from config import (
     AI_ENABLED,
     AI_PROBABILITY,
-    AI_MODEL_WEEKLY,
+    AI_MODEL_CELEBRATION,
     DISCORD_TOKEN,
     GUILD_ID,
     POLL_INTERVAL_SECONDS,
@@ -546,6 +546,8 @@ async def handle_ac(discord_id: int, atcoder_id: str, submission: dict, submitte
     guild = bot.get_guild(GUILD_ID) if GUILD_ID else None
     if guild:
         await update_rank_message(guild)
+
+    await check_and_send_goal_milestone(discord_id, atcoder_id)
     return True
 
 
@@ -592,6 +594,14 @@ def score_marker(score: int) -> str:
     if score < 300:
         return "🔥"
     return "💥💥"
+
+
+def build_progress_bar(current: int, target: int, length: int = 20) -> str:
+    if target <= 0:
+        return "░" * length
+    ratio = min(current / target, 1.0)
+    filled = int(ratio * length)
+    return "█" * filled + "░" * (length - filled)
 
 
 def build_ac_embed(
@@ -734,6 +744,109 @@ async def send_ac_notification(
         await channel.send(content=content, embed=embed)
     except discord.Forbidden:
         logger.warning("missing permissions to send notification")
+
+
+async def check_and_send_goal_milestone(discord_id: int, atcoder_id: str) -> None:
+    if not pool or not GUILD_ID:
+        return
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+    week_start = week_start_jst(now_utc())
+    goal = await db.get_weekly_goal(pool, discord_id, week_start)
+    if not goal:
+        return
+    target = goal["target_score"]
+    if target <= 0:
+        return
+    current_score = await db.get_weekly_score(pool, week_start, discord_id)
+    pct = current_score / target * 100
+
+    milestones = [
+        (100, "notified_100"),
+        (75, "notified_75"),
+        (50, "notified_50"),
+        (25, "notified_25"),
+    ]
+    milestone_to_send = None
+    for threshold, field in milestones:
+        if pct >= threshold and not goal[field]:
+            milestone_to_send = threshold
+            break
+    if milestone_to_send is None:
+        return
+
+    await db.update_goal_notification(pool, discord_id, week_start, milestone_to_send)
+    await send_goal_milestone_notification(guild, discord_id, atcoder_id, current_score, target, milestone_to_send)
+
+
+async def send_goal_milestone_notification(
+    guild: discord.Guild,
+    discord_id: int,
+    atcoder_id: str,
+    current_score: int,
+    target_score: int,
+    milestone: int,
+) -> None:
+    if not pool:
+        return
+    settings = await db.get_settings(pool, guild.id)
+    notify_channel_id = settings.get("notify_channel_id")
+    if not notify_channel_id:
+        return
+    channel = guild.get_channel(notify_channel_id)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(notify_channel_id)
+        except (discord.NotFound, discord.Forbidden):
+            return
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    bar = build_progress_bar(current_score, target_score)
+    pct = min(int(current_score / target_score * 100), 100) if target_score > 0 else 0
+
+    if milestone == 100:
+        ai_comment = None
+        ai_enabled = settings.get("ai_enabled", AI_ENABLED)
+        if ai_enabled:
+            prompt = (
+                "目的: 週間目標達成のお祝いメッセージを作る。\n"
+                "条件: 日本語1文・25〜60文字・絵文字1つ以上・達成を称える。\n"
+                "例:\n"
+                " - 目標達成おめでとう！努力が実を結んだね🎉\n"
+                " - 見事クリア！この調子で次も頑張ろう💪\n"
+                " - やったね！コツコツ積み上げた成果だ✨\n"
+                f"ユーザー:{atcoder_id}\n"
+                f"目標:{target_score}pts\n"
+                f"現在:{current_score}pts\n"
+                "この状況に合う一言を作成。"
+            )
+            ai_comment = await generate_message(
+                prompt,
+                system_prompt="週間目標達成のお祝いメッセージを書く。日本語1文、絵文字1つ以上、25〜60文字で返す。",
+                model=AI_MODEL_CELEBRATION,
+            )
+            if ai_comment:
+                logger.info("Goal AI message ok len=%s user=%s", len(ai_comment), atcoder_id)
+
+        content = (
+            f"🏆 <@{discord_id}> が週間目標 {target_score}pts を達成！\n"
+            f"[{bar}] {pct}%"
+        )
+        if ai_comment:
+            content += f"\n\n{ai_comment}"
+    else:
+        content = (
+            f"📊 <@{discord_id}> が週間目標の {milestone}% に到達！\n"
+            f"現在: {current_score} / {target_score} pts\n"
+            f"[{bar}] {pct}%"
+        )
+
+    try:
+        await channel.send(content)
+    except discord.Forbidden:
+        logger.warning("missing permissions to send goal milestone notification")
 
 
 async def update_rank_message(guild: discord.Guild) -> None:
@@ -938,7 +1051,7 @@ async def send_weekly_reset_message(
         ai_text = await generate_message(
             prompt,
             system_prompt="週間ランキングの労いコメントを書く。日本語1文、絵文字1つ以上、25〜80文字で返す。",
-            model=AI_MODEL_WEEKLY,
+            model=AI_MODEL_CELEBRATION,
         )
         if ai_text:
             lines.append(f"コメント: {ai_text}")
@@ -1328,6 +1441,69 @@ async def profile(interaction: discord.Interaction, user: discord.Member | None 
         f"{target.mention}\nレート: {rating}\nストリーク: {streak['current_streak']}日",
         ephemeral=True,
     )
+
+
+goal_group = app_commands.Group(name="goal", description="週間目標の設定")
+
+
+@goal_group.command(name="set")
+@app_commands.describe(score="目標スコア")
+async def goal_set(interaction: discord.Interaction, score: int) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if score <= 0:
+        await interaction.response.send_message("目標スコアは1以上を指定してください", ephemeral=True)
+        return
+    week_start = week_start_jst(now_utc())
+    await db.upsert_weekly_goal(pool, interaction.user.id, week_start, score)
+    current_score = await db.get_weekly_score(pool, week_start, interaction.user.id)
+    pct = min(int(current_score / score * 100), 100) if score > 0 else 0
+    bar = build_progress_bar(current_score, score)
+    await interaction.response.send_message(
+        f"📊 週間目標を {score} pts に設定しました！\n"
+        f"現在: {current_score} / {score} pts\n"
+        f"[{bar}] {pct}%"
+    )
+
+
+@goal_group.command(name="show")
+async def goal_show(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    week_start = week_start_jst(now_utc())
+    goal = await db.get_weekly_goal(pool, interaction.user.id, week_start)
+    if not goal:
+        await interaction.response.send_message("今週の目標が設定されていません。`/goal set` で設定してください", ephemeral=True)
+        return
+    target = goal["target_score"]
+    current_score = await db.get_weekly_score(pool, week_start, interaction.user.id)
+    pct = min(int(current_score / target * 100), 100) if target > 0 else 0
+    bar = build_progress_bar(current_score, target)
+    status = "🏆 達成！" if current_score >= target else ""
+    await interaction.response.send_message(
+        f"📊 週間目標の進捗 {status}\n"
+        f"現在: {current_score} / {target} pts\n"
+        f"[{bar}] {pct}%"
+    )
+
+
+@goal_group.command(name="clear")
+async def goal_clear(interaction: discord.Interaction) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    week_start = week_start_jst(now_utc())
+    goal = await db.get_weekly_goal(pool, interaction.user.id, week_start)
+    if not goal:
+        await interaction.response.send_message("今週の目標が設定されていません", ephemeral=True)
+        return
+    await db.delete_weekly_goal(pool, interaction.user.id, week_start)
+    await interaction.response.send_message("週間目標を解除しました")
+
+
+bot.tree.add_command(goal_group)
 
 
 if __name__ == "__main__":
