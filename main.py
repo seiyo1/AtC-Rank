@@ -917,6 +917,14 @@ async def send_weekly_reset_message(
             sign = "+" if delta > 0 else ""
             delta_lines.append(f"{name}:{sign}{delta}")
 
+        recent_reports = await db.get_recent_weekly_reports(pool, limit=5)
+        report_blocks = []
+        for report in recent_reports:
+            week_label = report.get("week_start") or "unknown"
+            text = report.get("report_text") or ""
+            report_blocks.append(f"[{week_label}]\n{text}")
+        recent_text = "\n\n".join(report_blocks) if report_blocks else "なし"
+
         prompt = (
             "目的: 週間ランキングリセットに添える一言コメントを作る。\n"
             "条件: 日本語1文・25〜80文字・絵文字1つ以上・労いと応援。\n"
@@ -924,6 +932,7 @@ async def send_weekly_reset_message(
             f"上位3:{', '.join(top_lines) if top_lines else 'なし'}\n"
             f"連続上位:{', '.join(repeated) if repeated else 'なし'}\n"
             f"伸び:{', '.join(delta_lines) if delta_lines else 'なし'}\n"
+            f"過去ログ(直近5件):\n{recent_text}\n"
             "この状況に合う一言を作成。"
         )
         ai_text = await generate_message(

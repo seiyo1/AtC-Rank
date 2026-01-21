@@ -301,6 +301,20 @@ async def upsert_weekly_report(
     await conn.commit()
 
 
+async def get_recent_weekly_reports(conn: aiosqlite.Connection, limit: int = 5) -> list[dict[str, Any]]:
+    cursor = await conn.execute(
+        """
+        select week_start, reset_time, report_text, ai_comment
+          from weekly_reports
+         order by week_start desc
+         limit ?
+        """,
+        (limit,),
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def insert_submission(
     conn: aiosqlite.Connection,
     discord_id: int,
