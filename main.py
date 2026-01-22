@@ -536,6 +536,7 @@ async def handle_ac(discord_id: int, atcoder_id: str, submission: dict, submitte
         submission_id,
         submitted_at,
         score_final,
+        score_base,
         diff_emoji,
         rate_emoji,
         difficulty,
@@ -596,12 +597,39 @@ def score_marker(score: int) -> str:
     return "💥💥"
 
 
-def build_progress_bar(current: int, target: int, length: int = 20) -> str:
+def build_progress_bar(current: int, target: int, length: int = 10) -> str:
     if target <= 0:
         return "░" * length
     ratio = min(current / target, 1.0)
     filled = int(ratio * length)
     return "█" * filled + "░" * (length - filled)
+
+
+def build_goal_embed(
+    current: int,
+    target: int,
+    *,
+    title: str = "📊 週間目標",
+    status: str = "",
+) -> discord.Embed:
+    pct = min(int(current / target * 100), 100) if target > 0 else 0
+    bar = build_progress_bar(current, target)
+
+    if current >= target:
+        color = discord.Colour.gold()
+        status = "🏆 達成！"
+    elif pct >= 75:
+        color = discord.Colour.green()
+    elif pct >= 50:
+        color = discord.Colour.blue()
+    else:
+        color = discord.Colour.greyple()
+
+    embed = discord.Embed(title=f"{title} {status}", color=color)
+    embed.add_field(name="進捗", value=f"{current} / {target} pts", inline=True)
+    embed.add_field(name="達成率", value=f"{pct}%", inline=True)
+    embed.add_field(name="", value=f"`{bar}`", inline=False)
+    return embed
 
 
 def build_ac_embed(
@@ -614,6 +642,7 @@ def build_ac_embed(
     submission_id: int | None,
     submitted_at: datetime,
     score: int,
+    base_score: int,
     weekly_score: int,
     streak: int,
     difficulty: int | None,
@@ -634,7 +663,7 @@ def build_ac_embed(
     else:
         diff_text = f"{diff_emoji} {difficulty}"
     marker = score_marker(score)
-    score_text = f"**+{score}** {marker}".strip()
+    score_text = f"**+{score}**{marker}"
     embed.add_field(name="Score", value=score_text, inline=False)
     embed.add_field(name="コメント", value=description or " ", inline=False)
     embed.add_field(name="Difficulty", value=diff_text, inline=False)
@@ -654,6 +683,7 @@ async def send_ac_notification(
     submission_id: int | None,
     submitted_at: datetime,
     score: int,
+    base_score: int,
     diff_emoji: str,
     rate_emoji: str,
     difficulty: int | None,
@@ -740,6 +770,7 @@ async def send_ac_notification(
         submission_id=submission_id,
         submitted_at=submitted_at,
         score=score,
+        base_score=base_score,
         weekly_score=weekly_score,
         streak=streak,
         difficulty=difficulty,
@@ -812,9 +843,6 @@ async def send_goal_milestone_notification(
     if not isinstance(channel, discord.TextChannel):
         return
 
-    bar = build_progress_bar(current_score, target_score)
-    pct = min(int(current_score / target_score * 100), 100) if target_score > 0 else 0
-
     if milestone == 100:
         ai_comment = None
         ai_enabled = settings.get("ai_enabled", AI_ENABLED)
@@ -846,21 +874,16 @@ async def send_goal_milestone_notification(
             if ai_comment:
                 logger.info("Goal AI message ok len=%s user=%s", len(ai_comment), atcoder_id)
 
-        content = (
-            f"🏆 <@{discord_id}> が週間目標 {target_score}pts を達成！\n"
-            f"[{bar}] {pct}%"
-        )
+        embed = build_goal_embed(current_score, target_score, title="🏆 週間目標達成！")
         if ai_comment:
-            content += f"\n\n{ai_comment}"
+            embed.add_field(name="", value=ai_comment, inline=False)
+        content = f"<@{discord_id}>"
     else:
-        content = (
-            f"📊 <@{discord_id}> が週間目標の {milestone}% に到達！\n"
-            f"現在: {current_score} / {target_score} pts\n"
-            f"[{bar}] {pct}%"
-        )
+        embed = build_goal_embed(current_score, target_score, title=f"📊 週間目標 {milestone}% 到達！")
+        content = f"<@{discord_id}>"
 
     try:
-        await channel.send(content)
+        await channel.send(content=content, embed=embed)
     except discord.Forbidden:
         logger.warning("missing permissions to send goal milestone notification")
 
@@ -1297,7 +1320,7 @@ async def debug_notify(interaction: discord.Interaction) -> None:
     rate_emoji = COLOR_EMOJI[color_key(rating)]
     template = pick_template(score)
     description = template.format(user=display_name)
-    # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
+    base_score = 278
     embed = build_ac_embed(
         title="ABC999 A Sample",
         display_name=display_name,
@@ -1307,6 +1330,7 @@ async def debug_notify(interaction: discord.Interaction) -> None:
         submission_id=12345678,
         submitted_at=now_utc(),
         score=score,
+        base_score=base_score,
         weekly_score=weekly_score,
         streak=streak,
         difficulty=difficulty,
@@ -1369,8 +1393,7 @@ async def debug_notify_ai(interaction: discord.Interaction) -> None:
     ai_text = await generate_message(prompt)
     if ai_text:
         description = ai_text
-    # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
-
+    base_score = 278
     embed = build_ac_embed(
         title="ABC999 A Sample",
         display_name=display_name,
@@ -1380,6 +1403,7 @@ async def debug_notify_ai(interaction: discord.Interaction) -> None:
         submission_id=12345678,
         submitted_at=now_utc(),
         score=score,
+        base_score=base_score,
         weekly_score=weekly_score,
         streak=streak,
         difficulty=difficulty,
@@ -1506,16 +1530,11 @@ async def goal_set(interaction: discord.Interaction, score: int) -> None:
     if score <= 0:
         await interaction.response.send_message("目標スコアは1以上を指定してください", ephemeral=True)
         return
-    week_start = week_start_jst(now_utc())
-    await db.upsert_weekly_goal(pool, interaction.user.id, week_start, score)
-    current_score = await db.get_weekly_score(pool, week_start, interaction.user.id)
-    pct = min(int(current_score / score * 100), 100) if score > 0 else 0
-    bar = build_progress_bar(current_score, score)
-    await interaction.response.send_message(
-        f"📊 週間目標を {score} pts に設定しました！\n"
-        f"現在: {current_score} / {score} pts\n"
-        f"[{bar}] {pct}%"
-    )
+    ws = week_start_jst(now_utc())
+    await db.upsert_weekly_goal(pool, interaction.user.id, ws, score)
+    current_score = await db.get_weekly_score(pool, ws, interaction.user.id)
+    embed = build_goal_embed(current_score, score, title="🎯 目標を設定しました")
+    await interaction.response.send_message(embed=embed)
 
 
 @goal_group.command(name="show")
@@ -1523,21 +1542,15 @@ async def goal_show(interaction: discord.Interaction) -> None:
     if not pool:
         await interaction.response.send_message("DB未接続", ephemeral=True)
         return
-    week_start = week_start_jst(now_utc())
-    goal = await db.get_weekly_goal(pool, interaction.user.id, week_start)
+    ws = week_start_jst(now_utc())
+    goal = await db.get_weekly_goal(pool, interaction.user.id, ws)
     if not goal:
         await interaction.response.send_message("今週の目標が設定されていません。`/goal set` で設定してください", ephemeral=True)
         return
     target = goal["target_score"]
-    current_score = await db.get_weekly_score(pool, week_start, interaction.user.id)
-    pct = min(int(current_score / target * 100), 100) if target > 0 else 0
-    bar = build_progress_bar(current_score, target)
-    status = "🏆 達成！" if current_score >= target else ""
-    await interaction.response.send_message(
-        f"📊 週間目標の進捗 {status}\n"
-        f"現在: {current_score} / {target} pts\n"
-        f"[{bar}] {pct}%"
-    )
+    current_score = await db.get_weekly_score(pool, ws, interaction.user.id)
+    embed = build_goal_embed(current_score, target)
+    await interaction.response.send_message(embed=embed)
 
 
 @goal_group.command(name="clear")
@@ -1608,14 +1621,47 @@ class GoalSetModal(discord.ui.Modal, title="週間目標を設定"):
         ws = week_start_jst(now_utc())
         await db.upsert_weekly_goal(pool, interaction.user.id, ws, score)
         current_score = await db.get_weekly_score(pool, ws, interaction.user.id)
-        pct = min(int(current_score / score * 100), 100) if score > 0 else 0
-        bar = build_progress_bar(current_score, score)
-        await interaction.response.send_message(
-            f"🎯 週間目標を **{score}pts** に設定しました！\n"
-            f"現在: {current_score} / {score} pts\n"
-            f"[{bar}] {pct}%",
-            ephemeral=True,
-        )
+        embed = build_goal_embed(current_score, score, title="🎯 目標を設定しました")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ConfirmUnregisterView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="解除する", style=discord.ButtonStyle.danger, emoji="❌")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        await db.deactivate_user(pool, interaction.user.id)
+        if interaction.guild:
+            member = interaction.guild.get_member(interaction.user.id)
+            if member:
+                await remove_user_roles(member)
+        await interaction.response.edit_message(content="✅ 登録を解除しました", view=None)
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="❌ キャンセルしました", view=None)
+
+
+class ConfirmGoalClearView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="解除する", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not pool:
+            await interaction.response.send_message("DB未接続", ephemeral=True)
+            return
+        ws = week_start_jst(now_utc())
+        await db.delete_weekly_goal(pool, interaction.user.id, ws)
+        await interaction.response.edit_message(content="✅ 週間目標を解除しました", view=None)
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="❌ キャンセルしました", view=None)
 
 
 class MenuView(discord.ui.View):
@@ -1628,15 +1674,11 @@ class MenuView(discord.ui.View):
 
     @discord.ui.button(label="登録解除", style=discord.ButtonStyle.danger, custom_id="menu:unregister", emoji="❌", row=0)
     async def unregister_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not pool:
-            await interaction.response.send_message("DB未接続", ephemeral=True)
-            return
-        await db.deactivate_user(pool, interaction.user.id)
-        if interaction.guild:
-            member = interaction.guild.get_member(interaction.user.id)
-            if member:
-                await remove_user_roles(member)
-        await interaction.response.send_message("✅ 登録を解除しました", ephemeral=True)
+        await interaction.response.send_message(
+            "⚠️ 登録を解除しますか？\nロールも削除されます。",
+            view=ConfirmUnregisterView(),
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="目標設定", style=discord.ButtonStyle.primary, custom_id="menu:goal_set", emoji="🎯", row=1)
     async def goal_set_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1654,15 +1696,8 @@ class MenuView(discord.ui.View):
             return
         target = goal["target_score"]
         current_score = await db.get_weekly_score(pool, ws, interaction.user.id)
-        pct = min(int(current_score / target * 100), 100) if target > 0 else 0
-        bar = build_progress_bar(current_score, target)
-        status = "🏆 達成！" if current_score >= target else ""
-        await interaction.response.send_message(
-            f"📊 週間目標の進捗 {status}\n"
-            f"現在: {current_score} / {target} pts\n"
-            f"[{bar}] {pct}%",
-            ephemeral=True,
-        )
+        embed = build_goal_embed(current_score, target)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="目標解除", style=discord.ButtonStyle.secondary, custom_id="menu:goal_clear", emoji="🗑️", row=1)
     async def goal_clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1674,8 +1709,12 @@ class MenuView(discord.ui.View):
         if not goal:
             await interaction.response.send_message("📊 今週の目標が設定されていません", ephemeral=True)
             return
-        await db.delete_weekly_goal(pool, interaction.user.id, ws)
-        await interaction.response.send_message("✅ 週間目標を解除しました", ephemeral=True)
+        target = goal["target_score"]
+        await interaction.response.send_message(
+            f"⚠️ 週間目標 **{target}pts** を解除しますか？",
+            view=ConfirmGoalClearView(),
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="プロフィール", style=discord.ButtonStyle.secondary, custom_id="menu:profile", emoji="👤", row=2)
     async def profile_button(self, interaction: discord.Interaction, button: discord.ui.Button):
