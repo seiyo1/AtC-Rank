@@ -583,6 +583,8 @@ def pick_template(score: int) -> str:
         key = "low"
     elif score < 300:
         key = "mid"
+    elif score < 350:
+        key = "mid"
     elif score < 400:
         key = "high"
     else:
@@ -593,7 +595,7 @@ def pick_template(score: int) -> str:
 def score_marker(score: int) -> str:
     if score < 200:
         return ""
-    if score < 300:
+    if score < 350:
         return "🔥"
     return "💥💥"
 
@@ -728,7 +730,7 @@ async def send_ac_notification(
     else:
         roll = None
     if ai_enabled and roll is not None and roll <= ai_prob:
-        use_hard = difficulty is not None and difficulty >= rating + 200
+        use_hard = score >= 350
         hard_rule = "「難問/難問突破/難しい」などの語は使用可。" if use_hard else "「難問/難問突破/難しい」などの語は禁止。"
         recent_msgs = await db.get_recent_notify_history(pool, limit=5)
         msg_lines = []
@@ -747,6 +749,10 @@ async def send_ac_notification(
             f"- 問題難易度: {difficulty}（数値が高いほど難問）\n"
             f"- ユーザーレート: {rating}\n"
             f"- 連続AC日数: {streak}日\n"
+            "- スコア帯の目安:\n"
+            "  - 0〜199: 軽め/基礎\n"
+            "  - 200〜349: 標準〜やや高め\n"
+            "  - 350以上: 高難度/難問\n"
             "</状況>\n\n"
             "<条件>\n"
             "- 日本語1文、25〜60文字\n"
@@ -754,6 +760,7 @@ async def send_ac_notification(
             "- ポジティブで自然な口調\n"
             "- 状況に合わせて言及（streak長い→継続を褒める、高難度→突破を称える等）\n"
             f"- 語彙制約: {hard_rule}\n"
+            "- 難易度の表現は必須ではないが、入れる場合はスコア帯の目安に従うこと\n"
             "- 直近5件の通知と被らない内容にする（焦点を変える：例=難易度/継続/スコア/ペース/達成感など）\n"
             "</条件>\n\n"
             "<例>\n"
