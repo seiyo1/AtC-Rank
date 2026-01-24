@@ -600,6 +600,12 @@ def score_marker(score: int) -> str:
     return "💥💥"
 
 
+def model_display_name(model: str) -> str:
+    if "/" in model:
+        return model.split("/", 1)[1]
+    return model
+
+
 def build_progress_bar(current: int, target: int, length: int = 10) -> str:
     if target <= 0:
         return "░" * length
@@ -778,7 +784,7 @@ async def send_ac_notification(
         for model_name in AI_MODELS_NOTIFY:
             ai_text = await generate_message(prompt, model=model_name)
             if ai_text:
-                ai_texts.append(ai_text)
+                ai_texts.append((model_name, ai_text))
                 logger.info(
                     "AC AI message ok model=%s len=%s user=%s",
                     model_name,
@@ -788,14 +794,9 @@ async def send_ac_notification(
             else:
                 logger.info("AC AI message empty model=%s user=%s", model_name, atcoder_id)
         if ai_texts:
-            unique_texts = []
-            for text in ai_texts:
-                if text not in unique_texts:
-                    unique_texts.append(text)
-            if len(unique_texts) == 1:
-                description = unique_texts[0]
-            else:
-                description = "\n".join(f"・{text}" for text in unique_texts)
+                description = "\n".join(
+                    f"・[{model_display_name(model)}] {text}" for model, text in ai_texts
+                )
 
     # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
 
