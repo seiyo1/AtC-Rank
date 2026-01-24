@@ -60,6 +60,8 @@ SQLiteのDBファイルは起動時に自動作成されます。
 - `AI_ENABLED`: `true/false`（デフォルト: `true`）
 - `AI_PROBABILITY`: AI文面を使う確率(%)（デフォルト: `20`）
 - `AI_MODEL`: モデル名（デフォルト: `gpt-5-nano`）
+- `AI_MODELS_NOTIFY`: 通知用の複数モデル（カンマ区切り、設定時は複数コメントを出力）
+  - 未設定でも `AI_MODEL` がカンマ区切りなら通知に複数モデルを使用
 - `AI_MODEL_WEEKLY`: 週間リセット用AIモデル（デフォルト: `AI_MODEL`）
 
 **スケジュール（任意）**
@@ -82,6 +84,7 @@ OPENAI_API_KEY=
 AI_ENABLED=true
 AI_PROBABILITY=20
 AI_MODEL=gpt-5-nano
+AI_MODELS_NOTIFY=
 AI_MODEL_WEEKLY=gpt-5-mini
 POLL_INTERVAL_SECONDS=180
 INITIAL_FETCH_EPOCH=1768748400

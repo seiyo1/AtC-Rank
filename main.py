@@ -16,8 +16,9 @@ import db
 from ai import generate_message
 from config import (
     AI_ENABLED,
-    AI_PROBABILITY,
     AI_MODEL_CELEBRATION,
+    AI_MODELS_NOTIFY,
+    AI_PROBABILITY,
     DISCORD_TOKEN,
     GUILD_ID,
     POLL_INTERVAL_SECONDS,
@@ -766,12 +767,28 @@ async def send_ac_notification(
             "</直近5件の通知>\n\n"
             "一言のみ出力（説明不要）："
         )
-        ai_text = await generate_message(prompt)
-        if ai_text:
-            description = ai_text
-            logger.info("AC AI message ok len=%s user=%s", len(ai_text), atcoder_id)
-        else:
-            logger.info("AC AI message empty user=%s", atcoder_id)
+        ai_texts = []
+        for model_name in AI_MODELS_NOTIFY:
+            ai_text = await generate_message(prompt, model=model_name)
+            if ai_text:
+                ai_texts.append(ai_text)
+                logger.info(
+                    "AC AI message ok model=%s len=%s user=%s",
+                    model_name,
+                    len(ai_text),
+                    atcoder_id,
+                )
+            else:
+                logger.info("AC AI message empty model=%s user=%s", model_name, atcoder_id)
+        if ai_texts:
+            unique_texts = []
+            for text in ai_texts:
+                if text not in unique_texts:
+                    unique_texts.append(text)
+            if len(unique_texts) == 1:
+                description = unique_texts[0]
+            else:
+                description = "\n".join(f"・{text}" for text in unique_texts)
 
     # descriptionはメッセージ本体のみ（難易度はフィールドに表示）
 
