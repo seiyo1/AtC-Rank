@@ -56,6 +56,8 @@ score_final = round(score_base * mult)
 - AC検知時にメンション付きで投稿
 - スコア帯でテンプレ分岐（低/中/高/最高）
 - 20%でAI文面に置換（`gpt-5-nano`、失敗時テンプレへ復帰）
+- 複数モデル指定時はコメントを複数行出力し、各行に `[model-name]` を付与
+  - 単一モデル時は従来どおり本文のみ
 - 週間リセット時のAIコメントは別モデルを指定可能（`AI_MODEL_WEEKLY`）
 
 ### 色・絵文字
@@ -109,7 +111,7 @@ score_final = round(score_base * mult)
 - 初回取得の起点: `INITIAL_FETCH_EPOCH`（デフォルト 1768748400 = 2026-01-19 00:00 JST）
 
 ## 11. データ設計（主要テーブル）
-- users / problems / ratings / weekly_scores / submissions / streaks / user_problem_last_ac / settings / role_colors / weekly_reports
+- users / problems / ratings / weekly_scores / submissions / streaks / user_problem_last_ac / settings / role_colors / weekly_reports / notify_history
 
 ## 12. 未実装/暫定
 - ランキング全員表示の完全版（2000文字制限対応は未実装）
