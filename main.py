@@ -794,6 +794,9 @@ async def send_ac_notification(
             else:
                 logger.info("AC AI message empty model=%s user=%s", model_name, atcoder_id)
         if ai_texts:
+            if len(ai_texts) == 1:
+                description = ai_texts[0][1]
+            else:
                 description = "\n".join(
                     f"[{model_display_name(model)}] {text}" for model, text in ai_texts
                 )
@@ -1467,9 +1470,12 @@ async def debug_notify_ai(interaction: discord.Interaction) -> None:
         if ai_text:
             ai_texts.append((model_name, ai_text))
     if ai_texts:
-        description = "\n".join(
-            f"[{model_display_name(model)}] {text}" for model, text in ai_texts
-        )
+        if len(ai_texts) == 1:
+            description = ai_texts[0][1]
+        else:
+            description = "\n".join(
+                f"[{model_display_name(model)}] {text}" for model, text in ai_texts
+            )
     base_score = 278
     embed = build_ac_embed(
         title="ABC999 A Sample",
