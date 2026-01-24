@@ -727,6 +727,15 @@ async def send_ac_notification(
     else:
         roll = None
     if ai_enabled and roll is not None and roll <= ai_prob:
+        use_hard = difficulty is not None and difficulty >= rating + 200
+        hard_rule = "「難問/難問突破/難しい」などの語は使用可。" if use_hard else "「難問/難問突破/難しい」などの語は禁止。"
+        recent_msgs = await db.get_recent_notify_history(pool, limit=5)
+        msg_lines = []
+        for row in recent_msgs:
+            msg = row.get("message_text") or ""
+            if msg:
+                msg_lines.append(msg)
+        recent_text = "\n".join(msg_lines) if msg_lines else "なし"
         prompt = (
             "AtCoderのAC通知に添える一言を作成。\n\n"
             "<状況>\n"
@@ -743,6 +752,8 @@ async def send_ac_notification(
             "- 絵文字1〜2個\n"
             "- ポジティブで自然な口調\n"
             "- 状況に合わせて言及（streak長い→継続を褒める、高難度→突破を称える等）\n"
+            f"- 語彙制約: {hard_rule}\n"
+            "- 直近5件の通知と被らない内容にする（焦点を変える：例=難易度/継続/スコア/ペース/達成感など）\n"
             "</条件>\n\n"
             "<例>\n"
             "- ナイスAC！勢いがあるね🔥\n"
@@ -750,6 +761,9 @@ async def send_ac_notification(
             "- 7日連続AC、習慣化できてる💪\n"
             "- 着実に積み上げてるね、いい調子👍\n"
             "</例>\n\n"
+            "<直近5件の通知（重複回避の参考）>\n"
+            f"{recent_text}\n"
+            "</直近5件の通知>\n\n"
             "一言のみ出力（説明不要）："
         )
         ai_text = await generate_message(prompt)
@@ -784,6 +798,19 @@ async def send_ac_notification(
         await channel.send(content=content, embed=embed)
     except discord.Forbidden:
         logger.warning("missing permissions to send notification")
+    try:
+        await db.insert_notify_history(
+            pool,
+            discord_id=discord_id,
+            atcoder_id=atcoder_id,
+            problem_id=problem_id,
+            difficulty=difficulty,
+            rating=rating,
+            score=score,
+            message_text=description,
+        )
+    except Exception:
+        logger.exception("failed to store notify history")
 
 
 async def check_and_send_goal_milestone(discord_id: int, atcoder_id: str) -> None:

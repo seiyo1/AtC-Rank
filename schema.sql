@@ -68,6 +68,18 @@ create table if not exists weekly_reports (
   ai_comment text
 );
 
+create table if not exists notify_history (
+  id integer primary key autoincrement,
+  created_at text not null default CURRENT_TIMESTAMP,
+  discord_id integer references users(discord_id),
+  atcoder_id text,
+  problem_id text,
+  difficulty integer,
+  rating integer,
+  score integer,
+  message_text text
+);
+
 create table if not exists submissions (
   id integer primary key autoincrement,
   discord_id integer references users(discord_id),

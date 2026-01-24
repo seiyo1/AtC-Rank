@@ -315,6 +315,41 @@ async def get_recent_weekly_reports(conn: aiosqlite.Connection, limit: int = 5) 
     return [dict(r) for r in rows]
 
 
+async def insert_notify_history(
+    conn: aiosqlite.Connection,
+    *,
+    discord_id: int,
+    atcoder_id: str,
+    problem_id: str,
+    difficulty: int | None,
+    rating: int,
+    score: int,
+    message_text: str,
+) -> None:
+    await conn.execute(
+        """
+        insert into notify_history (discord_id, atcoder_id, problem_id, difficulty, rating, score, message_text)
+        values (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (discord_id, atcoder_id, problem_id, difficulty, rating, score, message_text),
+    )
+    await conn.commit()
+
+
+async def get_recent_notify_history(conn: aiosqlite.Connection, limit: int = 5) -> list[dict[str, Any]]:
+    cursor = await conn.execute(
+        """
+        select created_at, atcoder_id, problem_id, difficulty, rating, score, message_text
+          from notify_history
+         order by id desc
+         limit ?
+        """,
+        (limit,),
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 async def insert_submission(
     conn: aiosqlite.Connection,
     discord_id: int,
