@@ -1448,6 +1448,8 @@ async def debug_notify_ai(interaction: discord.Interaction) -> None:
         return
 
     await interaction.response.defer(ephemeral=True)
+    settings = await db.get_settings(pool, interaction.guild_id)
+    notify_models = resolve_notify_models(settings)
     display_name = "aisn"
     atcoder_id = "aisn"
     score = 320
