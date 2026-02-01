@@ -51,9 +51,28 @@ async def create_db(path: str) -> aiosqlite.Connection:
     return conn
 
 
+async def _ensure_settings_columns(
+    conn: aiosqlite.Connection,
+    columns: dict[str, str],
+) -> None:
+    cursor = await conn.execute("PRAGMA table_info(settings)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await conn.execute(f"ALTER TABLE settings ADD COLUMN {ddl}")
+
+
 async def init_db(conn: aiosqlite.Connection) -> None:
     schema = SCHEMA_PATH.read_text()
     await conn.executescript(schema)
+    await _ensure_settings_columns(
+        conn,
+        {
+            "ai_models_notify": "ai_models_notify text",
+        },
+    )
     await conn.execute(
         "update user_fetch_state set last_checked_epoch=? where last_checked_epoch=0",
         (INITIAL_FETCH_EPOCH,),

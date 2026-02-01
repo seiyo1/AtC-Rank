@@ -606,6 +606,19 @@ def model_display_name(model: str) -> str:
     return model
 
 
+def parse_models(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def resolve_notify_models(settings: dict) -> list[str]:
+    raw = settings.get("ai_models_notify")
+    if isinstance(raw, str) and raw.strip():
+        models = parse_models(raw)
+        if models:
+            return models
+    return AI_MODELS_NOTIFY
+
+
 def build_progress_bar(current: int, target: int, length: int = 10) -> str:
     if target <= 0:
         return "░" * length
@@ -705,6 +718,7 @@ async def send_ac_notification(
     if not guild:
         return
     settings = await db.get_settings(pool, guild.id)
+    notify_models = resolve_notify_models(settings)
     notify_channel_id = settings.get("notify_channel_id")
     if not notify_channel_id:
         return
@@ -781,7 +795,7 @@ async def send_ac_notification(
             "一言のみ出力（説明不要）："
         )
         ai_texts = []
-        for model_name in AI_MODELS_NOTIFY:
+        for model_name in notify_models:
             ai_text = await generate_message(prompt, model=model_name)
             if ai_text:
                 ai_texts.append((model_name, ai_text))
@@ -1237,6 +1251,8 @@ async def register(interaction: discord.Interaction, atcoder_id: str, user: disc
     if not pool:
         await interaction.response.send_message("DB未接続", ephemeral=True)
         return
+    settings = await db.get_settings(pool, interaction.guild_id)
+    notify_models = resolve_notify_models(settings)
     target = user or interaction.user
     if user and not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("管理者のみ代理登録できます", ephemeral=True)
@@ -1344,6 +1360,29 @@ async def set_ai(
     await db.update_setting(pool, interaction.guild_id, "ai_enabled", enabled)
     await db.update_setting(pool, interaction.guild_id, "ai_probability", probability)
     await interaction.response.send_message("AI設定を更新しました")
+
+
+@bot.tree.command(name="set_ai_model")
+@app_commands.describe(models="通知AIモデル（カンマ区切り）。defaultでリセット")
+async def set_ai_model(interaction: discord.Interaction, models: str | None = None) -> None:
+    if not pool:
+        await interaction.response.send_message("DB未接続", ephemeral=True)
+        return
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者のみ設定できます", ephemeral=True)
+        return
+    if not models or models.strip().lower() in {"default", "reset"}:
+        await db.update_setting(pool, interaction.guild_id, "ai_models_notify", None)
+        await interaction.response.send_message("通知AIモデルをデフォルトに戻しました")
+        return
+    model_list = parse_models(models)
+    if not model_list:
+        await interaction.response.send_message("モデル名を1つ以上指定してください", ephemeral=True)
+        return
+    normalized = ",".join(model_list)
+    await db.update_setting(pool, interaction.guild_id, "ai_models_notify", normalized)
+    label = ", ".join(model_list)
+    await interaction.response.send_message(f"通知AIモデルを設定しました: {label}")
 
 
 @bot.tree.command(name="ranking")
@@ -1465,7 +1504,7 @@ async def debug_notify_ai(interaction: discord.Interaction) -> None:
         "一言のみ出力（説明不要）："
     )
     ai_texts = []
-    for model_name in AI_MODELS_NOTIFY:
+    for model_name in notify_models:
         ai_text = await generate_message(prompt, model=model_name)
         if ai_text:
             ai_texts.append((model_name, ai_text))

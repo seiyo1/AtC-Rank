@@ -17,7 +17,8 @@ create table if not exists settings (
   health_channel_id integer,
   ai_enabled integer not null default 1,
   ai_probability integer not null default 20,
-  poll_interval_seconds integer not null default 180
+  poll_interval_seconds integer not null default 180,
+  ai_models_notify text
 );
 
 create table if not exists problems (

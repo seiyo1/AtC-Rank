@@ -59,6 +59,7 @@ score_final = round(score_base * mult)
 - 複数モデル指定時はコメントを複数行出力し、各行に `[model-name]` を付与
   - 単一モデル時は従来どおり本文のみ
 - 週間リセット時のAIコメントは別モデルを指定可能（`AI_MODEL_WEEKLY`）
+ - `/set_ai_model` で通知AIモデルをサーバー設定として上書き可能
 
 ### 色・絵文字
 - 絵文字はAC通知のみ
@@ -101,6 +102,7 @@ score_final = round(score_base * mult)
 - `/set_health_channel`
 - `/set_roles weekly_role streak_role`
 - `/set_ai enabled probability`
+- `/set_ai_model models`
 
 ## 10. スケジュール
 - ポーリング: 3分（`POLL_INTERVAL_SECONDS`で変更可）

@@ -63,6 +63,7 @@ SQLiteのDBファイルは起動時に自動作成されます。
 - `AI_MODELS_NOTIFY`: 通知用の複数モデル（カンマ区切り、設定時は複数コメントを出力）
   - 未設定でも `AI_MODEL` がカンマ区切りなら通知に複数モデルを使用
   - 複数モデル時のみコメントに `[model-name]` が付き、1モデル時は従来どおり本文のみ
+  - `/set_ai_model` でサーバー設定として上書き可能
 - `AI_MODEL_WEEKLY`: 週間リセット用AIモデル（デフォルト: `AI_MODEL`）
 
 **スケジュール（任意）**
@@ -113,6 +114,8 @@ pytest
 2. `/set_rank_channel`（ランキング固定メッセージのチャンネル）
 3. `/set_health_channel`（ヘルスチェック通知のチャンネル）
 4. `/set_roles weekly_role streak_role`（手動作成したロールを指定）
+5. `/set_ai enabled probability`（AI有効化と確率）
+6. `/set_ai_model models`（通知AIモデルの指定）
 
 ## コマンド
 
@@ -130,6 +133,7 @@ pytest
 - `/set_health_channel`
 - `/set_roles weekly_role streak_role`
 - `/set_ai enabled probability`
+- `/set_ai_model models`
 - `/debug_notify`（通知デザインのプレビュー）
 - `/debug_notify_ai`（AI通知プレビュー）
 - `/debug_rank`（ランキングデザインのプレビュー）
